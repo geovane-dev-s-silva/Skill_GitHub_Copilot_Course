@@ -10,6 +10,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
 from pathlib import Path
+from pymongo import MongoClient
+from bson.objectid import ObjectId
+from .db import get_activities_collection
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -19,66 +22,25 @@ current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
 
-# In-memory activity database
-activities = {
-    "Chess Club": {
-        "description": "Learn strategies and compete in chess tournaments",
-        "schedule": "Fridays, 3:30 PM - 5:00 PM",
-        "max_participants": 12,
-        "participants": ["michael@mergington.edu", "daniel@mergington.edu"]
-    },
-    "Programming Class": {
-        "description": "Learn programming fundamentals and build software projects",
-        "schedule": "Tuesdays and Thursdays, 3:30 PM - 4:30 PM",
-        "max_participants": 20,
-        "participants": ["emma@mergington.edu", "sophia@mergington.edu"]
-    },
-    "Gym Class": {
-        "description": "Physical education and sports activities",
-        "schedule": "Mondays, Wednesdays, Fridays, 2:00 PM - 3:00 PM",
-        "max_participants": 30,
-        "participants": ["john@mergington.edu", "olivia@mergington.edu"]
-    },
-    # Sports related activities
-    "Soccer Team": {
-        "description": "Join the school soccer team and compete in local leagues",
-        "schedule": "Tuesdays and Thursdays, 4:00 PM - 5:30 PM",
-        "max_participants": 18,
-        "participants": ["lucas@mergington.edu", "mia@mergington.edu"]
-    },
-    "Basketball Club": {
-        "description": "Practice basketball skills and play friendly matches",
-        "schedule": "Wednesdays, 3:30 PM - 5:00 PM",
-        "max_participants": 15,
-        "participants": ["liam@mergington.edu", "ava@mergington.edu"]
-    },
-    # Artistic activities
-    "Drama Club": {
-        "description": "Act in plays and participate in theater productions",
-        "schedule": "Mondays, 3:30 PM - 5:00 PM",
-        "max_participants": 25,
-        "participants": ["noah@mergington.edu", "isabella@mergington.edu"]
-    },
-    "Art Workshop": {
-        "description": "Explore painting, drawing, and sculpture",
-        "schedule": "Thursdays, 3:30 PM - 5:00 PM",
-        "max_participants": 20,
-        "participants": ["amelia@mergington.edu", "benjamin@mergington.edu"]
-    },
-    # Intellectual activities
-    "Math Olympiad": {
-        "description": "Prepare for math competitions and solve challenging problems",
-        "schedule": "Fridays, 2:00 PM - 3:30 PM",
-        "max_participants": 15,
-        "participants": ["charlotte@mergington.edu", "elijah@mergington.edu"]
-    },
-    "Debate Team": {
-        "description": "Develop public speaking and argumentation skills",
-        "schedule": "Wednesdays, 4:00 PM - 5:30 PM",
-        "max_participants": 16,
-        "participants": ["harper@mergington.edu", "james@mergington.edu"]
-    }
-}
+# NOTE: activities will be stored in MongoDB. When the server starts, if the
+# collection is empty the developer can run `scripts/seed_db.py` to populate it
+# with the original hard-coded activities.
+
+
+def _activities_from_db():
+    """Returna todas as atividades como um dict com o nome como chave."""
+    coll = get_activities_collection()
+    res = {}
+    for doc in coll.find():
+        key = doc.get('_id')
+        # remove internal _id from the payload
+        d = {k: v for k, v in doc.items() if k != '_id'}
+        res[key] = d
+    return res
+
+
+# Compatibility: leave original in-memory var for tests that might import it
+activities = _activities_from_db()
 
 
 @app.get("/")
@@ -88,23 +50,40 @@ def root():
 
 @app.get("/activities")
 def get_activities():
-    return activities
+    # Re-read from DB on each request to keep things simple for this demo
+    return _activities_from_db()
 
 
 @app.post("/activities/{activity_name}/signup")
 def signup_for_activity(activity_name: str, email: str):
     """Sign up a student for an activity"""
-    # Validate activity exists
-    if activity_name not in activities:
+    coll = get_activities_collection()
+    doc = coll.find_one({"_id": activity_name})
+    if not doc:
         raise HTTPException(status_code=404, detail="Activity not found")
 
-    # Get the specific activity
-    activity = activities[activity_name]
-
-    # Validate student is not already signed up
-    if email in activity["participants"]:
+    participants = doc.get('participants', [])
+    if email in participants:
         raise HTTPException(status_code=400, detail="Student already signed up for this activity")
-    
-    # Add student
-    activity["participants"].append(email)
+
+    participants.append(email)
+    coll.update_one({"_id": activity_name}, {"$set": {"participants": participants}})
     return {"message": f"Signed up {email} for {activity_name}"}
+
+
+# Novo endpoint para remover participante
+from fastapi import Query
+
+@app.delete("/activities/{activity_name}/unregister")
+def unregister_from_activity(activity_name: str, email: str = Query(...)):
+    """Remove um participante de uma atividade"""
+    coll = get_activities_collection()
+    doc = coll.find_one({"_id": activity_name})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    participants = doc.get('participants', [])
+    if email not in participants:
+        raise HTTPException(status_code=404, detail="Participant not found in this activity")
+    participants.remove(email)
+    coll.update_one({"_id": activity_name}, {"$set": {"participants": participants}})
+    return {"message": f"{email} removido de {activity_name}"}

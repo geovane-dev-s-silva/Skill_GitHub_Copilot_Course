@@ -1,3 +1,26 @@
+/* Remove bullets da lista de participantes */
+.participants-list.no-bullets {
+  list-style: none;
+  padding-left: 0;
+}
+
+/* Estiliza o item do participante e o ícone de exclusão */
+.participant-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.delete-participant {
+  cursor: pointer;
+  color: #c00;
+  margin-left: 6px;
+  font-size: 1.1em;
+  transition: color 0.2s;
+}
+.delete-participant:hover {
+  color: #f00;
+}
 * {
   box-sizing: border-box;
   margin: 0;
